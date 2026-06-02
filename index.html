@@ -129,6 +129,35 @@ input:focus,select:focus{border-color:var(--primary)}
 .balance-val.pos{color:var(--green)}
 .balance-val.neg{color:var(--red)}
 
+/* ===== STATS (individual spending) ===== */
+.stats-tabs{display:flex;background:var(--card);border-bottom:1px solid var(--line);
+  overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 8px}
+.stats-tab{padding:12px 16px;font-size:14px;font-weight:600;color:var(--muted);
+  white-space:nowrap;border-bottom:2px solid transparent;flex-shrink:0}
+.stats-tab.on{color:var(--primary);border-bottom-color:var(--primary)}
+.stats-tab:active{opacity:.7}
+.stats-overview{background:var(--card);border-radius:var(--radius);margin:10px 14px;
+  padding:16px;border:1px solid var(--line)}
+.stats-overview .stat-row{display:flex;justify-content:space-between;padding:8px 0;
+  border-bottom:1px solid var(--line);font-size:14px}
+.stats-overview .stat-row:last-child{border:0}
+.stats-overview .stat-label{color:var(--muted)}
+.stats-overview .stat-val{font-weight:700;font-variant-numeric:tabular-nums}
+.cat-section{margin:10px 14px}
+.cat-title{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;padding:12px 0 6px}
+.cat-item{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  margin-bottom:6px;padding:12px 14px;display:flex;align-items:center;gap:10px}
+.cat-item .cat-desc{flex:1;min-width:0}
+.cat-item .cat-desc-text{font-weight:600;font-size:14px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.cat-item .cat-desc-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.cat-item .cat-amt{text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums}
+.cat-item .cat-amt-main{font-weight:700;font-size:14px}
+.cat-item .cat-amt-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.bar-wrap{height:6px;background:var(--line);border-radius:3px;margin:10px 14px 0}
+.bar-fill{height:100%;border-radius:3px;background:var(--primary);transition:width .3s}
+
 /* ===== MODAL ===== */
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:30;
   display:flex;align-items:flex-end;justify-content:center}
@@ -202,7 +231,8 @@ input:focus,select:focus{border-color:var(--primary)}
   <div id="expenseList"></div>
   <div class="action-bar">
     <button class="btn btn-primary" id="addExpenseBtn">+ Add Expense</button>
-    <button class="btn btn-outline" id="settleBtn">Settle Up</button>
+    <button class="btn btn-outline" id="spendingBtn">Spending</button>
+    <button class="btn btn-outline" id="settleBtn">Settle</button>
   </div>
 </div>
 
@@ -210,6 +240,12 @@ input:focus,select:focus{border-color:var(--primary)}
 <div class="view" id="v-settle">
   <div class="round-bar" id="roundBar"></div>
   <div id="settleContent"></div>
+</div>
+
+<!-- VIEW: Individual Spending Stats -->
+<div class="view" id="v-stats">
+  <div class="stats-tabs" id="statsTabs"></div>
+  <div id="statsContent"></div>
 </div>
 
 <!-- MODAL: Add/Edit Expense -->
@@ -397,6 +433,11 @@ function go(view, opts={}){
     action.textContent = '⚙️';
     action.onclick = () => openEditTrip();
     renderTrip();
+  } else if (view === 'stats') {
+    $('#v-stats').classList.add('active');
+    title.textContent = 'Individual Spending';
+    backBtn.classList.remove('hidden');
+    renderStats(opts.member || null);
   } else if (view === 'settle') {
     $('#v-settle').classList.add('active');
     title.textContent = 'Settlement';
@@ -758,6 +799,154 @@ function renderSettle(){
   $('#settleContent').innerHTML = html;
 }
 
+// ========== INDIVIDUAL SPENDING STATS ==========
+let statsMember = null;
+
+function renderStats(member){
+  const t = trip();
+  if (!t || !t.expenses.length) {
+    $('#statsTabs').innerHTML = '';
+    $('#statsContent').innerHTML = `<div class="empty-state"><div class="icon">📊</div><p>No expenses to analyze yet</p></div>`;
+    return;
+  }
+
+  // default to first member
+  if (!member || !t.members.includes(member)) member = t.members[0];
+  statsMember = member;
+
+  // tabs for each member
+  $('#statsTabs').innerHTML = t.members.map(m =>
+    `<button class="stats-tab ${m===member?'on':''}" data-m="${esc(m)}">${esc(m)}</button>`
+  ).join('');
+  $('#statsTabs').querySelectorAll('.stats-tab').forEach(el => {
+    el.onclick = () => renderStats(el.dataset.m);
+  });
+
+  // --- compute stats for this member ---
+  // 1) What they PAID for (out of pocket)
+  const paid = t.expenses.filter(e => e.paidBy === member);
+  const totalPaid = paid.reduce((s,e) => s + toHKD(e.amount, e.currency), 0);
+
+  // 2) Their SHARE of spending (what they consumed)
+  let totalShare = 0;
+  const shareItems = [];
+  for (const e of t.expenses) {
+    if (!e.splitAmong.includes(member)) continue;
+    const perPerson = toHKD(e.amount, e.currency) / e.splitAmong.length;
+    totalShare += perPerson;
+    shareItems.push({ ...e, myShare: perPerson });
+  }
+
+  // 3) Group by category (description keyword) for the share items
+  const categories = {};
+  for (const item of shareItems) {
+    const cat = categorize(item.description);
+    if (!categories[cat]) categories[cat] = { items: [], total: 0 };
+    categories[cat].items.push(item);
+    categories[cat].total += item.myShare;
+  }
+  // sort categories by total descending
+  const sortedCats = Object.entries(categories).sort((a,b) => b[1].total - a[1].total);
+
+  // 4) Net balance
+  const net = totalPaid - totalShare;
+
+  // --- render ---
+  let html = '';
+
+  // overview card
+  html += `<div class="stats-overview">
+    <div class="stat-row"><span class="stat-label">Total paid</span>
+      <span class="stat-val">HKD ${fmtNum(totalPaid,2)}</span></div>
+    <div class="stat-row"><span class="stat-label">Their share</span>
+      <span class="stat-val">HKD ${fmtNum(totalShare,2)}</span></div>
+    <div class="stat-row"><span class="stat-label">Net balance</span>
+      <span class="stat-val" style="color:${net>0.005?'var(--green)':net<-0.005?'var(--red)':'inherit'}">${net>0?'+':''}HKD ${fmtNum(net,2)}</span></div>
+    <div class="stat-row"><span class="stat-label">Transactions paid</span>
+      <span class="stat-val">${paid.length}</span></div>
+    <div class="stat-row"><span class="stat-label">Involved in</span>
+      <span class="stat-val">${shareItems.length} expenses</span></div>
+  </div>`;
+
+  // spending by category
+  html += `<div class="cat-section"><div class="cat-title">Spending by category</div>`;
+  for (const [cat, data] of sortedCats) {
+    const pct = totalShare > 0 ? (data.total / totalShare * 100) : 0;
+    html += `<div class="cat-item">
+      <div class="cat-desc">
+        <div class="cat-desc-text">${esc(cat)}</div>
+        <div class="cat-desc-sub">${data.items.length} item${data.items.length>1?'s':''} · ${fmtNum(pct,1)}%</div>
+        <div class="bar-wrap" style="margin:6px 0 0"><div class="bar-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="cat-amt">
+        <div class="cat-amt-main">HKD ${fmtNum(data.total,2)}</div>
+      </div>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // detailed list: what they paid for
+  if (paid.length) {
+    html += `<div class="cat-section"><div class="cat-title">Paid by ${esc(member)}</div>`;
+    const sortedPaid = [...paid].sort((a,b) => b.date.localeCompare(a.date) || b.ts - a.ts);
+    for (const e of sortedPaid) {
+      const hkd = toHKD(e.amount, e.currency);
+      html += `<div class="cat-item">
+        <div class="cat-desc">
+          <div class="cat-desc-text">${esc(e.description || 'Untitled')}</div>
+          <div class="cat-desc-sub">${formatDate(e.date)} · split ${e.splitAmong.length} ${e.splitAmong.length===1?'person':'people'}</div>
+        </div>
+        <div class="cat-amt">
+          <div class="cat-amt-main">${fmtMoney(e.amount, e.currency)}</div>
+          ${e.currency !== BASE ? `<div class="cat-amt-sub">≈ HKD ${fmtNum(hkd,2)}</div>` : ''}
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // detailed list: their share of others' expenses
+  const othersExpenses = shareItems.filter(e => e.paidBy !== member);
+  if (othersExpenses.length) {
+    html += `<div class="cat-section"><div class="cat-title">Shared from others</div>`;
+    const sortedOthers = [...othersExpenses].sort((a,b) => b.date.localeCompare(a.date) || b.ts - a.ts);
+    for (const e of sortedOthers) {
+      html += `<div class="cat-item">
+        <div class="cat-desc">
+          <div class="cat-desc-text">${esc(e.description || 'Untitled')}</div>
+          <div class="cat-desc-sub">${formatDate(e.date)} · paid by ${esc(e.paidBy)}</div>
+        </div>
+        <div class="cat-amt">
+          <div class="cat-amt-main">HKD ${fmtNum(e.myShare,2)}</div>
+          <div class="cat-amt-sub">${esc(member)}'s share</div>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  $('#statsContent').innerHTML = html;
+}
+
+function categorize(desc){
+  if (!desc) return 'Other';
+  const d = desc.toLowerCase();
+  const map = [
+    [['breakfast','lunch','dinner','food','eat','restaurant','meal','brunch','bbq','buffet','ramen','sushi','noodle','rice','steak','pizza','burger','café','cafe','bakery','dim sum','hotpot','night market'],'🍽️ Food & Dining'],
+    [['drink','coffee','tea','beer','wine','bar','pub','boba','juice','cocktail','alcohol'],'☕ Drinks'],
+    [['taxi','uber','grab','bus','train','mrt','metro','subway','transport','toll','gas','fuel','parking','bike','scooter','ferry','lyft','bolt'],'🚕 Transport'],
+    [['hotel','hostel','airbnb','stay','accommodation','resort','lodge','motel','room','rent'],'🏨 Accommodation'],
+    [['ticket','museum','temple','park','tour','attraction','show','concert','movie','cinema','spa','massage','activity','adventure','diving','snorkel','zip'],'🎫 Activities'],
+    [['shop','souvenir','gift','clothes','buy','purchase','mall','store','market'],'🛍️ Shopping'],
+    [['grocery','supermarket','convenience','snack','711','7-eleven','family mart','lawson'],'🏪 Groceries'],
+    [['sim','phone','wifi','internet','data','laundry','tip','insurance','visa','fee','charge'],'📱 Misc Services'],
+  ];
+  for (const [keywords, label] of map) {
+    if (keywords.some(k => d.includes(k))) return label;
+  }
+  return '📦 Other';
+}
+
 // ========== EXPORT / IMPORT ==========
 function exportData(){
   const json = JSON.stringify(S, null, 2);
@@ -815,7 +1004,7 @@ $('#exSplit').addEventListener('click', e => {
 
 // ========== WIRING ==========
 $('#backBtn').onclick = () => {
-  if (currentView === 'settle') go('trip');
+  if (currentView === 'settle' || currentView === 'stats') go('trip');
   else go('home');
 };
 
@@ -835,6 +1024,7 @@ $('#importBtn').onclick = importData;
 
 // trip
 $('#addExpenseBtn').onclick = () => openExpenseModal(null);
+$('#spendingBtn').onclick = () => go('stats');
 $('#settleBtn').onclick = () => go('settle');
 
 // expense modal
