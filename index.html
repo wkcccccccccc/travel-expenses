@@ -264,6 +264,8 @@ input:focus,select:focus{border-color:var(--primary)}
       </div>
       <label>What for</label>
       <input id="exDesc" type="text" placeholder="Dinner, taxi, hotel…" autocomplete="off">
+      <label>Category</label>
+      <select id="exCat"></select>
       <label>Date</label>
       <input id="exDate" type="date">
       <label>Paid by</label>
@@ -325,6 +327,10 @@ const FALLBACK_RATES = {
   THB:4.6, SGD:0.172, GBP:0.101, MOP:1.03, VND:3250, MYR:0.60, IDR:2100,
   PHP:7.4, AUD:0.20, CAD:0.18, NZD:0.22
 };
+const CATEGORIES = [
+  '🍽️ Food & Dining','☕ Drinks','🚕 Transport','🏨 Accommodation',
+  '🎫 Activities','🛍️ Shopping','🏪 Groceries','📱 Services','📦 Other'
+];
 const ROUND_OPTIONS = [
   {label:'Exact', val:0.01},
   {label:'$1', val:1},
@@ -549,7 +555,7 @@ function renderTrip(){
       html += `<div class="expense-row" data-eid="${e.id}">
         <div class="ex-left">
           <div class="ex-desc">${esc(e.description || 'Untitled')}</div>
-          <div class="ex-sub">${esc(e.paidBy)} paid · split: ${esc(splitTxt)}</div>
+          <div class="ex-sub">${esc(e.paidBy)} paid · ${esc(e.category||'📦 Other')} · split: ${esc(splitTxt)}</div>
         </div>
         <div class="ex-right">
           <div class="ex-amount">${fmtMoney(e.amount, e.currency)}</div>
@@ -590,6 +596,10 @@ function openExpenseModal(eid){
   $('#exAmount').value = e ? e.amount : '';
   fillCcySelect($('#exCcy'), e ? e.currency : t.defaultCurrency);
   $('#exDesc').value = e ? (e.description || '') : '';
+  // category dropdown
+  const catSel = $('#exCat');
+  catSel.innerHTML = CATEGORIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  catSel.value = e && e.category ? e.category : CATEGORIES[0];
   $('#exDate').value = e ? e.date : today();
 
   // payer chips (single select)
@@ -630,6 +640,7 @@ function saveExpense(){
     amount,
     currency: $('#exCcy').value,
     description: $('#exDesc').value.trim(),
+    category: $('#exCat').value || CATEGORIES[CATEGORIES.length-1],
     date: $('#exDate').value || today(),
     paidBy: payerEl.dataset.m,
     splitAmong: splitEls.map(c => c.dataset.m),
@@ -837,10 +848,10 @@ function renderStats(member){
     shareItems.push({ ...e, myShare: perPerson });
   }
 
-  // 3) Group by category (description keyword) for the share items
+  // 3) Group by category (manually assigned) for the share items
   const categories = {};
   for (const item of shareItems) {
-    const cat = categorize(item.description);
+    const cat = item.category || '📦 Other';
     if (!categories[cat]) categories[cat] = { items: [], total: 0 };
     categories[cat].items.push(item);
     categories[cat].total += item.myShare;
@@ -926,25 +937,6 @@ function renderStats(member){
   }
 
   $('#statsContent').innerHTML = html;
-}
-
-function categorize(desc){
-  if (!desc) return 'Other';
-  const d = desc.toLowerCase();
-  const map = [
-    [['breakfast','lunch','dinner','food','eat','restaurant','meal','brunch','bbq','buffet','ramen','sushi','noodle','rice','steak','pizza','burger','café','cafe','bakery','dim sum','hotpot','night market'],'🍽️ Food & Dining'],
-    [['drink','coffee','tea','beer','wine','bar','pub','boba','juice','cocktail','alcohol'],'☕ Drinks'],
-    [['taxi','uber','grab','bus','train','mrt','metro','subway','transport','toll','gas','fuel','parking','bike','scooter','ferry','lyft','bolt'],'🚕 Transport'],
-    [['hotel','hostel','airbnb','stay','accommodation','resort','lodge','motel','room','rent'],'🏨 Accommodation'],
-    [['ticket','museum','temple','park','tour','attraction','show','concert','movie','cinema','spa','massage','activity','adventure','diving','snorkel','zip'],'🎫 Activities'],
-    [['shop','souvenir','gift','clothes','buy','purchase','mall','store','market'],'🛍️ Shopping'],
-    [['grocery','supermarket','convenience','snack','711','7-eleven','family mart','lawson'],'🏪 Groceries'],
-    [['sim','phone','wifi','internet','data','laundry','tip','insurance','visa','fee','charge'],'📱 Misc Services'],
-  ];
-  for (const [keywords, label] of map) {
-    if (keywords.some(k => d.includes(k))) return label;
-  }
-  return '📦 Other';
 }
 
 // ========== EXPORT / IMPORT ==========
